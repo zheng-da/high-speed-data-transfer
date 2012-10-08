@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
+#include <netdb.h>
 
 // The packet length
 #define PCKT_LEN 81920
@@ -90,8 +91,11 @@ int main(int argc, char *argv[])
 	din.sin_port = htons(atoi(argv[4]));
 
 	// IP addresses
-	sin.sin_addr.s_addr = inet_addr(argv[1]);
-	din.sin_addr.s_addr = inet_addr(argv[3]);
+	struct hostent h_sent, h_dent;
+	memcpy(&h_sent, gethostbyname(argv[1]), sizeof(h_sent));
+	memcpy(&h_dent, gethostbyname(argv[3]), sizeof(h_dent));
+	memcpy(&sin.sin_addr, h_sent.h_addr, sizeof(sin));
+	memcpy(&din.sin_addr, h_dent.h_addr, sizeof(din));
 
 	int payload_size = atoi(argv[5]);
 	int packet_len = sizeof(struct iphdr) + sizeof(struct udphdr) + payload_size;
