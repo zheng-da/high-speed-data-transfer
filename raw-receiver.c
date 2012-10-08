@@ -74,6 +74,7 @@ int main(int argc, char *argv[])
 	printf("Using listen port: %u.\n", atoi(argv[1]));
 
 	ssize_t recv_len = 0;
+	int num_recv = 0;
 	struct timeval start, now;
 	gettimeofday(&start, NULL);
 	while(1)
@@ -85,6 +86,7 @@ int main(int argc, char *argv[])
 			exit(-1);
 		}
 		recv_len += len;
+		num_recv++;
 		long *payload = (long *) (buffer + sizeof(struct iphdr) + sizeof(struct udphdr));
 		if (*payload == 9998)
 			break;
@@ -97,7 +99,7 @@ int main(int argc, char *argv[])
 	duration_now += now.tv_usec - start.tv_usec;
 	rate_now = recv_len * 8 * 1000000;
 	rate_now = rate_now/duration_now;
-	printf("receive bytes: %ld, rate: %lf bps\n", recv_len, rate_now);
+	printf("receive %d packets, bytes: %ld, rate: %lf bps\n", num_recv, recv_len, rate_now);
 
 	close(sd);
 	return 0;
