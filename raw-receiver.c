@@ -69,13 +69,14 @@ int main(int argc, char *argv[])
 	else
 		printf("setsockopt() is OK.\n");
 
-	// Send loop, send for every 2 second for 100 count
 	printf("Trying...\n");
 	printf("Using raw socket and UDP protocol\n");
 	printf("Using listen port: %u.\n", atoi(argv[1]));
 
-	int count;
-	for(count = 1; count <=20; count++)
+	ssize_t recv_len = 0;
+	struct timeval start, now;
+	gettimeofday(&start, NULL);
+	while(1)
 	{
 		ssize_t len = recv(sd, buffer, sizeof(buffer), 0);
 		if(len < 0)
@@ -83,8 +84,20 @@ int main(int argc, char *argv[])
 			perror("recv() error");
 			exit(-1);
 		}
-		printf("receive a packet of %ld bytes\n", len);
+		recv_len += len;
+		long *payload = (long *) (buffer + sizeof(struct iphdr) + sizeof(struct udphdr));
+		if (*payload == 9998)
+			break;
 	}
+	gettimeofday(&now, NULL);
+	double rate_now;
+	long duration_now;
+	duration_now  = (now.tv_sec - start.tv_sec);
+	duration_now *= 1000000;
+	duration_now += now.tv_usec - start.tv_usec;
+	rate_now = recv_len * 8 * 1000000;
+	rate_now = rate_now/duration_now;
+	printf("receive bytes: %ld, rate: %lf bps\n", recv_len, rate_now);
 
 	close(sd);
 	return 0;

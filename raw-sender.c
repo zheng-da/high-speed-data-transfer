@@ -11,6 +11,25 @@
 // The packet length
 #define PCKT_LEN 8192
 
+void isleep(int usec)
+{
+	int diff;
+	struct timeval start, now;
+
+	gettimeofday(&start, NULL);
+	diff = 0;
+	while(diff < usec) {
+		/* If enough time to sleep, otherwise, busywait */
+		if(usec - diff > 200) {
+			usleep(usec-20);
+		}
+		gettimeofday(&now, NULL);
+		diff = now.tv_sec - start.tv_sec;
+		diff *= 1000000;
+		diff += now.tv_usec - start.tv_usec;
+	}
+}
+
 // Function for checksum calculation. From the RFC,
 // the checksum algorithm is:
 //  "The checksum field is the 16 bit one's complement of the one's
@@ -43,10 +62,10 @@ int main(int argc, char *argv[])
 	const int *val = &one;
 
 	memset(buffer, 0, PCKT_LEN);
-	if(argc != 6)
+	if(argc != 8)
 	{
 		printf("- Invalid parameters!!!\n");
-		printf("- Usage %s <source hostname/IP> <source port> <target hostname/IP> <target port> <payload size>\n", argv[0]);
+		printf("- Usage %s <source hostname/IP> <source port> <target hostname/IP> <target port> <payload size> <num of packets> <rate>\n", argv[0]);
 		exit(-1);
 	}
 
@@ -76,6 +95,8 @@ int main(int argc, char *argv[])
 
 	int payload_size = atoi(argv[5]);
 	int packet_len = sizeof(struct iphdr) + sizeof(struct udphdr) + payload_size;
+	int num_packets = atoi(argv[6]);
+	int send_rate = atoi(argv[7]);
 
 	// Fabricate the IP header or we can use the
 	// standard header structures but assign our own values.
@@ -115,19 +136,40 @@ int main(int argc, char *argv[])
 	printf("Using Source IP: %s port: %u, Target IP: %s port: %u.\n", argv[1], atoi(argv[2]), argv[3], atoi(argv[4]));
 
 	int count;
-	for(count = 1; count <=20; count++)
+	struct timeval start, now;
+	gettimeofday(&start, NULL);
+	for(count = 1; count <= num_packets + 10; count++)
 	{
-		if(sendto(sd, buffer, packet_len, 0, (struct sockaddr *)&din, sizeof(din)) < 0)
+		long *payload = (long *) (buffer + sizeof(struct iphdr) + sizeof(struct udphdr));
+		if (count < num_packets)
+			*payload = 9999;
+		else
+			*payload = 9998;
+		ssize_t len = sendto(sd, buffer, packet_len, 0, (struct sockaddr *)&din, sizeof(din));
+		if(len < 0)
 		{
 			perror("sendto() error");
 			exit(-1);
 		}
-		else
-		{
-			printf("Count #%u - sendto() is OK.\n", count);
-			sleep(2);
-		}
+		gettimeofday(&now, NULL);
+		double rate_now;
+		long duration_now;
+        duration_now  = (now.tv_sec - start.tv_sec);
+        duration_now *= 1000000;
+        duration_now += now.tv_usec - start.tv_usec;
+        rate_now = packet_len * count * 8 * 1000;
+        rate_now = rate_now/duration_now;
+		if(rate_now > send_rate) {
+			long int_delay = packet_len * count * 8 * 1000;
+			int_delay = int_delay/send_rate;
+			int_delay = int_delay - duration_now;
 
+			if((int_delay <= 0)||(int_delay > 10000000))
+				printf("!!! BIG delay !!!  %ld\n", int_delay);
+			if(int_delay > 0)
+				isleep(int_delay);
+		}
+		printf("send a packet of %ld bytes\n", len);
 	}
 
 	close(sd);
