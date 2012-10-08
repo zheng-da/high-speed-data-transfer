@@ -112,9 +112,9 @@ int main(int argc, char *argv[])
 	ip->ttl = 64; // hops
 	ip->protocol = 17; // UDP
 	// Source IP address, can use spoofed address here!!!
-	ip->saddr = inet_addr(argv[1]);
+	ip->saddr = sin.sin_addr.s_addr;
 	// The destination IP address
-	ip->daddr = inet_addr(argv[3]);
+	ip->daddr = din.sin_addr.s_addr;
 	ip->frag_off |= htons(IP_DF);
 
 	// Fabricate the UDP header. Source port number, redundant
