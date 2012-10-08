@@ -9,7 +9,7 @@
 #include <netinet/udp.h>
 
 // The packet length
-#define PCKT_LEN 8192
+#define PCKT_LEN 81920
 
 void isleep(int usec)
 {

@@ -7,7 +7,7 @@
 #include <netinet/udp.h>
 
 // The packet length
-#define PCKT_LEN 8192
+#define PCKT_LEN 81920
 
 // listen port from the command line arguments
 int main(int argc, char *argv[])
