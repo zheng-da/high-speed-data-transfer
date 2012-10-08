@@ -111,6 +111,7 @@ int main(int argc, char *argv[])
 	ip->saddr = inet_addr(argv[1]);
 	// The destination IP address
 	ip->daddr = inet_addr(argv[3]);
+	ip->frag_off |= htons(IP_DF);
 
 	// Fabricate the UDP header. Source port number, redundant
 	udp->source = htons(atoi(argv[2]));
