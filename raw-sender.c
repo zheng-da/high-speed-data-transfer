@@ -121,7 +121,7 @@ int main(int argc, char *argv[])
 	udp->source = htons(atoi(argv[2]));
 	// Destination port number
 	udp->dest = htons(atoi(argv[4]));
-	udp->len = htons(sizeof(struct udphdr));
+	udp->len = htons(packet_len - sizeof(struct iphdr));
 
 	// Calculate the checksum for integrity
 	ip->check = csum((unsigned short *)buffer, packet_len);
