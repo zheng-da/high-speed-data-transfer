@@ -52,8 +52,8 @@ volatile int shutdown_flag = 0;
 struct tpacket_req s_packet_req;
 struct sockaddr_in src_addr;
 char ether_src[ETH_ALEN];
+char ether_dst[ETH_ALEN];
 // TODO I just hard code these two for now.
-char ether_dst[ETH_ALEN] = {0x0, 0x1d, 0x09, 0xf1, 0x3c, 0x1d};
 short src_port = 6666;
 
 int task_send(int blocking);
@@ -73,6 +73,9 @@ static void usage()
 			" -n\tset buffer count\n"
 			" -j\tset send() period (mask==0)\n"
 			" -z\tset socket buffer size\n"
+			" -a\tset destination IP address\n"
+			" -p\tset destination port\n"
+			" -M\tset destination MAC address\n"
 			" -l\tdiscard wrong packets\n"
 			" -e\tgenerate error [num]\n"
 			" -v\tbe verbose\n"
@@ -83,7 +86,7 @@ void getargs( int argc, char ** argv )
 {
 	int c;
 	opterr = 0;
-	while( (c = getopt( argc, argv, "e:s:m:b:B:n:c:z:j:a:p:vhgtl"))!= EOF) {
+	while( (c = getopt( argc, argv, "e:s:m:b:B:n:c:z:j:a:p:M:vhgtl"))!= EOF) {
 		switch( c ) {
 			case 's': c_packet_sz = strtoul( optarg, NULL, 0 ); break;
 			case 'c': c_packet_nb = strtoul( optarg, NULL, 0 ); break;
@@ -99,6 +102,18 @@ void getargs( int argc, char ** argv )
 						  break;
 					  }
 			case 'p': dst_addr.sin_port = atoi(optarg);         break;
+			case 'M': {
+						  char *tmp = optarg;
+						  int i;
+						  for (i = 0; i < 5; i++) {
+							  tmp = strstr(tmp, ":");
+							  *tmp = 0;
+							  ether_dst[i] = strtoul(tmp, NULL, 16);
+							  tmp++;
+						  }
+						  ether_dst[5] = strtoul(tmp, NULL, 16);
+						  break;
+					  }
 			case 'e': c_error     = strtoul( optarg, NULL, 0 ); break;
 			case 'g': mode_dgram  = 1;                          break;
 			case 't': mode_thread = 1;                          break;
