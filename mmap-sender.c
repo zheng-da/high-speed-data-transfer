@@ -40,7 +40,6 @@ static int mode_dgram    = 0;
 static int mode_thread   = 0;
 static int mode_loss     = 0;
 static int mode_verbose  = 0;
-static int c_num_pkts    = 1000;
 static struct sockaddr_in dst_addr;
 
 /* globals */
@@ -350,7 +349,7 @@ int main( int argc, char ** argv )
 
 	int i;
 	char buf[1400];
-	for (i = 0; i < c_num_pkts; i++)
+	for (i = 0; i < c_packet_nb; i++)
 		sendudp(buf, sizeof(buf), &dst_addr);
 
 
