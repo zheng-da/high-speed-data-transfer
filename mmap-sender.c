@@ -17,10 +17,14 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
+#include <net/ethernet.h>
+#include <netinet/ip.h>
+#include <netinet/udp.h>
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
 #include <poll.h>
 #include <pthread.h>
+#include <netdb.h>
 
 /* params */
 static char * str_devname= NULL;
@@ -36,6 +40,8 @@ static int mode_dgram    = 0;
 static int mode_thread   = 0;
 static int mode_loss     = 0;
 static int mode_verbose  = 0;
+static int c_num_pkts    = 1000;
+static struct sockaddr_in dst_addr;
 
 /* globals */
 volatile int fd_socket;
@@ -44,9 +50,14 @@ volatile struct sockaddr_ll *ps_sockaddr = NULL;
 volatile struct tpacket_hdr * ps_header_start;
 volatile int shutdown_flag = 0;
 struct tpacket_req s_packet_req;
+struct sockaddr_in src_addr;
+char ether_src[ETH_ALEN];
+// TODO I just hard code these two for now.
+char ether_dst[ETH_ALEN] = {0x0, 0x1d, 0x09, 0xf1, 0x3c, 0x1d};
+short src_port = 6666;
 
-void *task_send(void *arg);
-void *task_fill(void *arg);
+int task_send(int blocking);
+ssize_t sendudp(char *data, ssize_t len, const struct sockaddr_in *dest);
 
 static void usage()
 {
@@ -72,7 +83,7 @@ void getargs( int argc, char ** argv )
 {
 	int c;
 	opterr = 0;
-	while( (c = getopt( argc, argv, "e:s:m:b:B:n:c:z:j:vhgtl"))!= EOF) {
+	while( (c = getopt( argc, argv, "e:s:m:b:B:n:c:z:j:a:p:vhgtl"))!= EOF) {
 		switch( c ) {
 			case 's': c_packet_sz = strtoul( optarg, NULL, 0 ); break;
 			case 'c': c_packet_nb = strtoul( optarg, NULL, 0 ); break;
@@ -81,6 +92,13 @@ void getargs( int argc, char ** argv )
 			case 'z': c_sndbuf_sz = strtoul( optarg, NULL, 0 ); break;
 			case 'm': c_mtu       = strtoul( optarg, NULL, 0 ); break;
 			case 'j': c_send_mask = strtoul( optarg, NULL, 0 ); break;
+			case 'a': {
+						  struct hostent h_dent;
+						  memcpy(&h_dent, gethostbyname(optarg), sizeof(h_dent));
+						  memcpy(&dst_addr.sin_addr, h_dent.h_addr, sizeof(dst_addr));
+						  break;
+					  }
+			case 'p': dst_addr.sin_port = atoi(optarg);         break;
 			case 'e': c_error     = strtoul( optarg, NULL, 0 ); break;
 			case 'g': mode_dgram  = 1;                          break;
 			case 't': mode_thread = 1;                          break;
@@ -126,29 +144,76 @@ void getargs( int argc, char ** argv )
 	printf( "mode_thread:       %d\n", mode_thread );
 }
 
+struct sockaddr get_if_addr(char *dev)
+{
+	struct ifreq if_mac;
+	memset(&if_mac, 0, sizeof(struct ifreq));
+	strncpy(if_mac.ifr_name, dev, IFNAMSIZ - 1);
+	int sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sock < 0) {
+		perror("socket");
+		exit(1);
+	}
+	if (ioctl(sock, SIOCGIFHWADDR, &if_mac) < 0) {
+		perror("SIOCGIFHWADDR");
+		exit(1);
+	}
+	close(sock);
+	return if_mac.ifr_hwaddr;
+}
+
+struct sockaddr_in get_if_ip(char *dev)
+{
+	struct ifreq if_ip;
+	memset(&if_ip, 0, sizeof(struct ifreq));
+	if_ip.ifr_addr.sa_family = AF_INET;
+	strncpy(if_ip.ifr_name, dev, IFNAMSIZ - 1);
+	int sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sock < 0) {
+		perror("socket");
+		exit(1);
+	}
+	if (ioctl(sock, SIOCGIFADDR, &if_ip) < 0) {
+		perror("SIOCGIFADDR");
+		exit(1);
+	}
+	close(sock);
+	return *(struct sockaddr_in *) &if_ip.ifr_addr;
+}
+
+// Function for checksum calculation. From the RFC,
+// the checksum algorithm is:
+//  "The checksum field is the 16 bit one's complement of the one's
+//  complement sum of all 16 bit words in the header.  For purposes of
+//  computing the checksum, the value of the checksum field is zero."
+unsigned short csum(unsigned short *buf, int nwords)
+{       //
+	unsigned long sum;
+	for(sum=0; nwords>0; nwords--)
+		sum += *buf++;
+	sum = (sum >> 16) + (sum &0xffff);
+	sum += (sum >> 16);
+	return (unsigned short)(~sum);
+}
+
 int main( int argc, char ** argv )
 {
 	uint32_t size, opt_len;
-	int fd, i, ec;
-	struct pollfd s_pfd;
+	int ec;
 	struct sockaddr_ll my_addr, peer_addr;
 	struct ifreq s_ifr; /* points to one interface returned from ioctl */
 	int len;
-	int i_updated_cnt;
 	int i_ifindex;
-	int i_header_size;
-	int smp_test = 1;
-	int i_hdrlen,i_sockopt_size, e_version;
 	int mode_socket;
 	int tmp;
-	int i_nb_error;
-
-	pthread_attr_t t_attr_send,t_attr_fill;
-	struct sched_param para_send,para_fill;
-	pthread_t t_send, t_fill;
 
 	/* get configuration */
 	getargs( argc, argv );
+
+	src_addr = get_if_ip(str_devname);
+	struct sockaddr hwaddr = get_if_addr(str_devname);
+	memcpy(ether_src, hwaddr.sa_data, sizeof(ether_dst));
+	dst_addr.sin_family = AF_INET;
 
 	printf("\nSTARTING TEST:\n");
 
@@ -256,7 +321,6 @@ int main( int argc, char ** argv )
 		return EXIT_FAILURE;
 	}
 
-
 	/* fill peer sockaddr for SOCK_DGRAM */
 	if (mode_dgram)
 	{
@@ -269,85 +333,20 @@ int main( int argc, char ** argv )
 		ps_sockaddr = &peer_addr;
 	}
 
+	int i;
+	char buf[1400];
+	for (i = 0; i < c_num_pkts; i++)
+		sendudp(buf, sizeof(buf), &dst_addr);
 
-	/* Set thread priorities, scheduler, ... */
-	pthread_attr_init(&t_attr_send);
-	pthread_attr_init(&t_attr_fill);
-
-	pthread_attr_setschedpolicy(&t_attr_send,SCHED_RR);
-	pthread_attr_setschedpolicy(&t_attr_fill,SCHED_RR);
-
-	para_send.sched_priority=20;
-	pthread_attr_setschedparam(&t_attr_send,&para_send);
-	para_fill.sched_priority=20;
-	pthread_attr_setschedparam(&t_attr_fill,&para_fill);
-
-	/* Start send() thread only on SMP mode */
-	if(mode_thread) {
-		if ( pthread_create(&t_send, &t_attr_send, task_send, (void *)1) != 0 )
-		{
-			perror("pthread_create()");
-			abort();
-		}
-	}
-
-	/* Start thread that fills dummy data in circular buffer */
-	if ( pthread_create(&t_fill, &t_attr_fill, task_fill, (void *)ps_header_start) != 0 )
-	{
-		perror("pthread_create()");
-		abort();
-	}
-
-
-	/* Wait end of fill thread */
-	pthread_join (t_fill, NULL);
-	if(mode_thread) {
-		shutdown_flag = 1;
-		printf("Shutdown requested (%d)\n",shutdown_flag);
-		pthread_join (t_send, NULL);
-	}
-	do {
-		ec = (int) task_send((void*)0);
-		printf("Loop until queue empty (%d)\n", ec);
-	} while((ec != 0)&&(c_error == 0));
-
-	/* check buffer */
-	i_nb_error = 0;
-	for(i=0; i<c_buffer_nb; i++)
-	{
-		struct tpacket_hdr * ps_header;
-		ps_header = ((struct tpacket_hdr *)((void *)ps_header_start + (c_buffer_sz*i)));
-		switch((volatile uint32_t)ps_header->tp_status)
-		{
-			case TP_STATUS_SEND_REQUEST:
-				printf("A frame has not been sent %p\n",ps_header);
-				i_nb_error++;
-				break;
-
-			case TP_STATUS_LOSING:
-				printf("An error has occured during transfer\n");
-				i_nb_error++;
-				break;
-
-			default:
-				break;
-		}
-
-	}
-	printf("END (number of error:%d)\n", i_nb_error);
-
-	/* close fd socket */
-	//close(fd_socket);
 
 	/* display header of all blocks */
 	return EXIT_SUCCESS;
 }
 
 /* This task will call send() procedure */
-void *task_send(void *arg) {
+int task_send(int blocking) {
 	int ec_send;
 	static int total=0;
-	int blocking = (int) arg;
 
 	if(blocking) printf("start send() thread\n");
 
@@ -383,100 +382,83 @@ void *task_send(void *arg) {
 	if(blocking) printf("end of task send()\n");
 	//printf("end of task send(ec=%x)\n", ec_send);
 
-	return (void*) ec_send;
+	return ec_send;
 }
 
-/* This task will fill circular buffer */
-void *task_fill(void *arg) {
-	int i,j;
-	int i_index = 0;
-	char * data;
-	int first_loop = 1;
-	struct tpacket_hdr * ps_header;
-	int ec_send = 0;
-
-	printf( "start fill() thread\n");
-
-	for(i=1; i <= c_packet_nb; i++)
-	{
-		int i_index_start = i_index;
-		int loop = 1;
-
-		/* get free buffer */
-		do {
-			ps_header = ((struct tpacket_hdr *)((void *)ps_header_start + (c_buffer_sz*i_index)));
-			data = ((void*) ps_header) + data_offset;
-			switch((volatile uint32_t)ps_header->tp_status)
-			{
-				case TP_STATUS_AVAILABLE:
-					/* fill data in buffer */
-					if(first_loop) {
-						for(j=0;j<c_packet_sz;j++)
-							data[j] = j;
-					}
-					loop = 0;
-					break;
-
-				case TP_STATUS_WRONG_FORMAT:
-					printf("An error has occured during transfer\n");
-					exit(EXIT_FAILURE);
-					break;
-
-				default:
-					/* nothing to do => schedule : useful if no SMP */
-					usleep(0);
-					break;
-			}
-		} while(loop == 1);
-
-		i_index ++;
-		if(i_index >= c_buffer_nb)
-		{
-			i_index = 0;
-			first_loop = 0;
-		}
-
-		/* update packet len */
-		ps_header->tp_len = c_packet_sz;
-		/* set header flag to USER (trigs xmit)*/
-		ps_header->tp_status = TP_STATUS_SEND_REQUEST;
-
-		/* if smp mode selected */
-		if(!mode_thread)
-		{
-			/* send all packets */
-			if( ((i&c_send_mask)==0) || (ec_send < 0) || (i == c_packet_nb) )
-			{
-				/* send all buffers with TP_STATUS_SEND_REQUEST */
-				/* Don't wait end of transfer */
-				ec_send = (int) task_send((void*)0);
-			}
-		}
-		else if(c_error) {
-
-			if(i == (c_packet_nb/2))
-			{
-				int ec_close;
-				if(mode_verbose) printf("close() start\n");
-
-				if(c_error == 1) {
-					ec_close = close(fd_socket);
-				}
-				if(c_error == 2) {
-					if (setsockopt(fd_socket,
-								SOL_PACKET,
-								PACKET_TX_RING,
-								(char *)&s_packet_req,
-								sizeof(s_packet_req))<0)
-					{
-						perror("setsockopt: PACKET_TX_RING");
-						//return EXIT_FAILURE;
-					}
-				}
-				if(mode_verbose) printf("close end (ec:%d)\n",ec_close);
-				break;
-			}
-		}
+void *get_free_buffer()
+{
+	int i;
+	for (i = 0; i < c_buffer_nb; i++) {
+		struct tpacket_hdr * ps_header = ((struct tpacket_hdr *)((void *)ps_header_start
+					+ (c_buffer_sz * i)));
+		char *data = ((void*) ps_header) + data_offset;
+		if ((volatile uint32_t)ps_header->tp_status == TP_STATUS_AVAILABLE)
+			return (void *) data;
 	}
-	printf("end of task fill()\n");
+	return NULL;
+}
+
+struct iphdr *construct_ip(struct iphdr *ip,
+		const struct sockaddr_in *dest, ssize_t packet_len)
+{
+	memset(ip, 0, sizeof (*ip));
+	ip->ihl = 5;
+	ip->version = 4;
+	ip->tos = 16; // Low delay
+	ip->tot_len = htons(packet_len);
+	ip->id = htons(54321);
+	ip->ttl = 64; // hops
+	ip->protocol = 17; // UDP
+	// Source IP address, can use spoofed address here!!!
+	ip->saddr = src_addr.sin_addr.s_addr;
+	// The destination IP address
+	ip->daddr = dest->sin_addr.s_addr;
+	ip->frag_off |= htons(IP_DF);
+	return ip;
+}
+
+struct udphdr *construct_udp(struct udphdr *udp,
+		short dst_port, ssize_t packet_len)
+{
+	udp->source = htons(src_port);
+	// Destination port number
+	udp->dest = htons(dst_port);
+	udp->len = htons(packet_len);
+	return udp;
+}
+
+struct ether_header *construct_ether(struct ether_header *ether)
+{
+	memcpy(ether->ether_shost, ether_src, sizeof(ether_src));
+	memcpy(ether->ether_dhost, ether_dst, sizeof(ether_dst));
+	ether->ether_type = htons(ETH_P_IP);
+	return ether;
+}
+
+/* send a UDP packet. */
+ssize_t sendudp(char *payload, ssize_t len, const struct sockaddr_in *dest)
+{
+	/* get free buffer */
+	void *data = get_free_buffer();
+	while (data == NULL) {
+		usleep(1);
+		data = get_free_buffer();
+	}
+	struct ether_header *ether = (struct ether_header *) data;
+	struct iphdr *ip = (struct iphdr *) (data + sizeof (*ether));
+	struct udphdr *udp = (struct udphdr *) (((char *) ip) + sizeof(struct iphdr));
+	short packet_len = (short) len + sizeof (*ip) + sizeof (*udp);
+	construct_ether(ether);
+	construct_ip(ip, dest, packet_len);
+	construct_udp(udp, dest->sin_port, packet_len - sizeof(struct iphdr));
+	// Calculate the checksum for integrity
+	ip->check = csum((unsigned short *)ip, packet_len);
+
+	struct tpacket_hdr *ps_header = (struct tpacket_hdr *) (data - data_offset);
+	/* update packet len */
+	ps_header->tp_len = c_packet_sz;
+	/* set header flag to USER (trigs xmit)*/
+	ps_header->tp_status = TP_STATUS_SEND_REQUEST;
+	int ec_send = task_send(0);
+	return len;
 }
