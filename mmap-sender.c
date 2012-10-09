@@ -471,7 +471,7 @@ ssize_t sendudp(char *payload, ssize_t len, const struct sockaddr_in *dest)
 
 	struct tpacket_hdr *ps_header = (struct tpacket_hdr *) (data - data_offset);
 	/* update packet len */
-	ps_header->tp_len = c_packet_sz;
+	ps_header->tp_len = packet_len + sizeof(*ether);
 	/* set header flag to USER (trigs xmit)*/
 	ps_header->tp_status = TP_STATUS_SEND_REQUEST;
 	int ec_send = task_send(0);
