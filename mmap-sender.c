@@ -19,6 +19,7 @@
 #include <net/if.h>
 #include <net/ethernet.h>
 #include <netinet/ip.h>
+#include <netinet/if_ether.h>
 #include <netinet/udp.h>
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
@@ -157,6 +158,28 @@ void getargs( int argc, char ** argv )
 	printf( "mode_thread:       %d\n", mode_thread );
 }
 
+struct sockaddr get_dest_mac(struct sockaddr_in *ip, char *dev)
+{
+	struct arpreq req;
+	bzero(&req, sizeof(req));
+	req.arp_pa = *(struct sockaddr *) ip;
+	int sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sock < 0) {
+		perror("socket");
+		exit(1);
+	}
+	strncpy(req.arp_dev, dev, sizeof(req.arp_dev));
+	if (ioctl(sock, SIOCGARP, &req) < 0) {
+		perror("SIOCGARP");
+		exit(1);
+	}
+	close(sock);
+	if (req.arp_flags & ATF_COM)
+		return req.arp_ha;
+	fprintf(stderr, "arp request flags: %d\n", req.arp_flags);
+	exit(1);
+}
+
 struct sockaddr get_if_addr(char *dev)
 {
 	struct ifreq if_mac;
@@ -225,7 +248,7 @@ int main( int argc, char ** argv )
 
 	src_addr = get_if_ip(str_devname);
 	struct sockaddr hwaddr = get_if_addr(str_devname);
-	memcpy(ether_src, hwaddr.sa_data, sizeof(ether_dst));
+	memcpy(ether_src, hwaddr.sa_data, sizeof(ether_src));
 	dst_addr.sin_family = AF_INET;
 
 	printf("\nSTARTING TEST:\n");
