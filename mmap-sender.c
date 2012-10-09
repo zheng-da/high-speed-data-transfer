@@ -149,7 +149,6 @@ void getargs( int argc, char ** argv )
 	printf( "c_packet_sz:       %d\n", c_packet_sz );
 	printf( "c_buffer_sz:       %d\n", c_buffer_sz );
 	printf( "c_buffer_nb:       %d\n", c_buffer_nb );
-	printf( "c_packet_sz count: %d\n", c_packet_sz );
 	printf( "c_packet_nb count: %d\n", c_packet_nb );
 	printf( "c_mtu:             %d\n", c_mtu );
 	printf( "c_send_mask:       %d\n", c_send_mask );
@@ -348,10 +347,13 @@ int main( int argc, char ** argv )
 	}
 
 	int i;
-	char buf[1400];
-	for (i = 0; i < c_packet_nb; i++)
-		sendudp(buf, sizeof(buf), &dst_addr);
+	char buf[c_packet_sz];
+	for (i = 0; i < c_packet_nb; i++) {
+		memset(buf, 0, c_packet_sz);
+		sendudp(buf, c_packet_sz, &dst_addr);
+	}
 
+	close(fd_socket);
 
 	/* display header of all blocks */
 	return EXIT_SUCCESS;
@@ -386,8 +388,8 @@ int task_send(int blocking) {
 			usleep(0);
 		}
 		else {
-			total += ec_send/(c_packet_sz);
-			printf("send %d packets (+%d bytes)\n",total, ec_send);
+			total += ec_send;
+			printf("send %d bytes (+%d bytes)\n",total, ec_send);
 			fflush(0);
 		}
 
@@ -434,6 +436,7 @@ struct iphdr *construct_ip(struct iphdr *ip,
 struct udphdr *construct_udp(struct udphdr *udp,
 		short dst_port, ssize_t packet_len)
 {
+	memset(udp, 0, sizeof(*udp));
 	udp->source = htons(src_port);
 	// Destination port number
 	udp->dest = htons(dst_port);
@@ -461,6 +464,8 @@ ssize_t sendudp(char *payload, ssize_t len, const struct sockaddr_in *dest)
 	struct ether_header *ether = (struct ether_header *) data;
 	struct iphdr *ip = (struct iphdr *) (data + sizeof (*ether));
 	struct udphdr *udp = (struct udphdr *) (((char *) ip) + sizeof(struct iphdr));
+	char *payload_ptr = ((char *) udp) + sizeof(*udp);
+	memcpy(payload_ptr, payload, len);
 	short packet_len = (short) len + sizeof (*ip) + sizeof (*udp);
 	construct_ether(ether);
 	construct_ip(ip, dest, packet_len);
